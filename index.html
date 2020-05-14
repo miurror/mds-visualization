@@ -1,0 +1,314 @@
+<html>
+<meta http-equiv="Content-Type" content="text/html" charset=utf-8/>
+<title>spherical 2-design</title>
+<script src="build/three.js"></script>
+<script src="js/controls/TrackballControls.js"></script>
+
+<!--
+<script type="text/x-mathjax-config">
+ MathJax.Hub.Config({ tex2jax: { inlineMath: [['$','$'], ["\\(","\\)"]] } });
+</script>
+<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.0/MathJax.js?config=TeX-AMS_CHTML"></script>
+-->
+
+<body>
+<script>
+// count of loops
+var count = 0;
+
+// screen parameters
+var width = window.innerWidth - 20.0;
+var height = window.innerHeight -20.0;
+var aspect = width / height;
+var sphereRadius = Math.min(width, height);
+
+// Arumijo's parameters 
+const LSALPHA = 0.1;
+const LSBETA = 0.4;
+const stepNum = 20;
+
+// other parameters
+var running = new Boolean(true);
+var hausdorffSqdist = 1;
+
+// array of mesh
+var initpoints =[]; 
+var points = [];
+
+// array of Vector3
+var positions = [];
+
+init();
+animate();
+
+// get parmeters from url 
+function getParam(name, url) {
+    if (!url) url = window.location.href;
+    name = name.replace(/[\[\]]/g, "\\$&");
+    var regex = new RegExp("[?&]" + name + "(=([^&#]*)|&|#|$)"),
+        results = regex.exec(url);
+    if (!results) return null;
+    if (!results[2]) return '';
+    return decodeURIComponent(results[2].replace(/\+/g, " "));
+}
+
+//
+function init() {
+  // scene
+  scene = new THREE.Scene();
+
+  //vec2 m = vec2(width - 1.0, -height + 1.0);
+  //vec2 p = (gl_FragCoord.xy * 2.0 - resolution) / min(resolution.x, resolution.y);
+  // one minus length
+  //float t = 1.0 - length(m - p);
+  //gl_FragColor = vec4(vec3(t), 1.0);
+
+  // camera
+  camera = new THREE.PerspectiveCamera(60, aspect, 1, 100 * sphereRadius);
+  camera.position.z = 4 * sphereRadius;
+  // lighting
+  var ambientLight = new THREE.AmbientLight(0xffffff, 3.0);
+  scene.add(ambientLight);
+  // trackball
+  trackball = new THREE.TrackballControls( camera );
+  trackball.rotateSpeed = 5.0;
+  trackball.zoomSpeed = 0.0;
+  trackball.panSpeed = 0.0;
+  // renderer
+  renderer = new THREE.WebGLRenderer();
+  renderer.setSize( width , height );
+  renderer.setClearColor(new THREE.Color(0x222222));
+  document.body.appendChild( renderer.domElement );
+   
+  // create ambient sphere
+  var geometry = new THREE.SphereGeometry(sphereRadius, 64, 64);
+  var material = new THREE.MeshLambertMaterial({
+         color: 0x3333ff, opacity: .7, transparent: true
+      });
+  var sphere = new THREE.Mesh(geometry, material); 
+  scene.add( sphere ); 
+
+  // create points
+  var num = parseInt(getParam('num'));
+  if ( !(Number.isInteger(num)) || num < 4 ){ num = 100 } // default: num = 100
+
+  for (let i = 0; i < num; i++) {
+   initpoints[i] = createRandomPoint(0xff4433);
+   points[i] = createRandomPoint(0xffff33);
+   points[i].position.copy(initpoints[i].position);
+   positions[i] = points[i].position.clone();
+   positions[i].multiplyScalar(1/sphereRadius);
+   scene.add(initpoints[i]);
+   scene.add(points[i]);
+  }
+}
+
+// return a normally distributed number (Box--Muller's method)
+function normalDistribution(){
+  var x = Math.random();
+  var y = Math.random();
+  return Math.sqrt(-2*Math.log(x))*Math.cos(2 * Math.PI  * y);
+}
+
+// create a random point on the sphere
+function createRandomPoint(color) {
+  var pointSphere = new THREE.Mesh(
+    new THREE.SphereGeometry(sphereRadius/60),
+    new THREE.MeshBasicMaterial({color: color}));				
+  var randomVec = 
+    new THREE.Vector3(normalDistribution(),normalDistribution(),normalDistribution());
+    //new THREE.Vector3(normalDistribution(), 2*(Math.random()-0.5),normalDistribution());
+  randomVec.normalize();
+  randomVec.multiplyScalar(sphereRadius);
+  pointSphere.position.copy(randomVec);
+  return pointSphere;
+}
+
+
+//
+function animate() {
+  var newpositions = [];
+  
+  if (hausdorffSqdist > 1e-15 && count < 1000){
+    count++;
+    hausdorffSqdist = 0;
+   
+    // computation for 
+    // - the gradient ( matrix ) in R^3
+    // - the squared norm of gradient ( the Frobenius norm ) in R^3
+    // - double-well potention ( objective function )
+    // for normalized point sets
+    var grad = []; 
+    var objective = 0;
+    var gradSqnorm = 0; 
+    for (let i = 0; i < positions.length; i++){
+      grad[i] = new THREE.Vector3();
+      for (let j = 0; j < positions.length; j++){
+        var tempGrad = new THREE.Vector3();
+        tempGrad.copy(positions[j]);
+        tempGrad.sub(positions[i]);
+        var sqdist = positions[j].distanceToSquared(positions[i]);
+        var mul = (8.0/3.0 - sqdist);
+        tempGrad.multiplyScalar(mul);
+        grad[i].add(tempGrad);
+	objective += mul ** 2;
+      }
+      gradSqnorm += grad[i].lengthSq();
+    }
+
+   // backtracking line search
+   var t = 1.0;
+   for (let k = 0; k < stepNum; k++){
+     // new positions
+     var newObjective = 0;
+     for (let i = 0; i < positions.length; i++){
+       newpositions[i] = positions[i].clone();
+       var tempGrad = grad[i].clone();
+       tempGrad.multiplyScalar(t);
+       newpositions[i].sub(tempGrad);
+     }
+     // new objective function
+     for (let i = 0; i < points.length; i++){
+       for (let j = 0; j < points.length; j++){
+         var sqdist = newpositions[i].distanceToSquared(newpositions[j]);
+         var mul = (8.0/3.0 - sqdist) ** 2;
+	 newObjective += mul;
+       }
+     }
+     // check Arumijo's condition in R^3
+     if (newObjective - objective <= LSALPHA * t * gradSqnorm) {
+       break;
+     } else {
+       if ( k == stepNum -1 ) {
+         hausdorffSqdist = 0;
+         console.log("not converged!");
+         break;
+       }
+       t *= LSBETA;
+     }
+   }
+
+   // move points
+   for (let i = 0; i < points.length; i++){
+     newpositions[i].normalize();
+     hausdorffSqdist += positions[i].distanceToSquared(newpositions[i]);
+     positions[i].copy(newpositions[i]);
+     newpositions[i].multiplyScalar(sphereRadius);
+     points[i].position.copy(newpositions[i]);
+   }
+
+  } else if (running){
+   // count of loop
+   console.log("Number of loops: ".concat(count));
+   
+   // barycenter and its norm
+   var center = barycenter(positions);
+   var sqnorm = center.lengthSq();
+
+   // covaricance minus I/3, and its sqnorm
+   var cov = covarianceMinusI(positions, center);
+   var sqnormCovMinusI = 0;
+   for (let d = 0; d < 3; d++){
+	 for (let dd = 0; dd < 3; dd++){
+	   sqnormCovMinusI += (cov[d][dd]) ** 2;
+	 }
+   }
+
+   // - connect lines
+   // - hausdorff squared distance
+   hausdorffSqdist = 0;
+   for (let i = 0; i < positions.length; i++){
+    var tempPosition = initpoints[i].position.clone();
+    tempPosition.multiplyScalar(1/sphereRadius);
+    hausdorffSqdist += positions[i].distanceToSquared(tempPosition);
+    var line = connectLine(points[i].position, initpoints[i].position);
+    scene.add(line);
+    if (sqnorm + sqnormCovMinusI < 1e-10){
+     points[i].material.color.setHex(0x33ff33);
+    }
+   }
+
+   running = false;
+   //  document.getElementById('bary').innerHTML += 
+   // "Squared norm of the barycenter:    " + sqnorm.toPrecision(2)  + "<br>" 
+   //  + "Squared Frobenius norm of (Cov - Id/3):  " + sqnormCovMinusI.toPrecision(2) + "<br>"
+   //  + "Squared distance between two configurations: " + hausdorffSqdist.toPrecision(2) + "<br>";
+  }
+
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+  trackball.update();   
+}
+
+function connectLine(startPoint, endPoint) {
+  var geometry = new THREE.Geometry();
+  var vertices = 15;
+  if (startPoint.distanceToSquared(endPoint) < (sphereRadius/30)**2){
+    vertices = 1;
+  }
+  geometry.vertices = getOrbitPoints(startPoint, endPoint, vertices);
+  return new THREE.Line(
+    geometry,
+    new THREE.LineBasicMaterial({linewidth: 5, color: 0xffffff}));
+}
+
+function getOrbitPoints(startPos, endPos, segmentNum) {
+  var vertices = [];
+  var startVec = startPos.clone();
+  var endVec = endPos.clone();
+
+  const axis = startVec.clone().cross(endVec);
+  axis.normalize();
+  const angle = startVec.angleTo(endVec);
+
+  for (let i = 0; i < segmentNum; i++) {
+    const q = new THREE.Quaternion();
+    q.setFromAxisAngle(axis, angle / segmentNum * i);
+    const vertex = startVec.clone().applyQuaternion(q);
+    vertices.push(vertex);
+  }
+  vertices.push(endVec);
+  return vertices;
+}
+
+function covarianceMinusI ( positionArray, center ){
+  var cov = [];
+  for (let d = 0; d < 3; d++){
+    cov[d] = [];
+    for (let dd = 0; dd < 3; dd++){
+      cov[d][dd] = 0;
+    }
+  }
+  for (let i = 0; i < positionArray.length; i++){
+    positionArray[i].sub(center);
+    var coordArray = positionArray[i].toArray();
+    for (let d = 0; d < 3; d++){
+      for (let dd = 0; dd < 3; dd++){
+        cov[d][dd] += coordArray[d] * coordArray[dd];
+	if(d==dd){
+	  cov[d][dd] -= 1/3;
+	}
+      }
+    }
+  }
+  for (let d = 0; d < 3; d++){
+    for (let dd = 0; dd < 3; dd++){
+      cov[d][dd] = cov[d][dd]/positionArray.length;
+    }
+  }
+  return cov;
+}
+
+function barycenter ( positionArray ){
+  var center = new THREE.Vector3();
+  for (let i = 0; i < positionArray.length; i++){
+    center.add(positionArray[i]); 
+  }
+  center.multiplyScalar(1/positionArray.length);
+  return center;
+}
+
+</script>
+<!--<div id ="bary"></div>-->
+</body>
+</html>
